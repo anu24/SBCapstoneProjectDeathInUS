@@ -1,0 +1,143 @@
+---
+title: "Gradient Bootstrapping "
+author: "Anushree Shivarudrappa"
+date: "June 15, 2016"
+output: pdf_document
+---
+
+# 1. Pre-Processing
+```{r, warning=FALSE, message=FALSE}
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(RColorBrewer)
+library(tidyr)
+library(caTools)
+library(rpart)
+library(rpart.plot)
+library(ROCR)
+library(randomForest)
+library(tree)
+library(caret)
+library(e1071)
+library(gbm)
+```
+
+# 2. Data Loading
+```{r, echo=FALSE}
+setwd("/Users/anushreeshivarudrappa/Desktop/Spring Board/SB Capstone DeathRecords DataSet")
+```
+```{r, message=FALSE, warning=FALSE,results='hide'}
+Death_US <- fread("DeathRecords.csv", header = T)
+
+```
+
+# 3. Selecting dataset for model
+
+```{r}
+# separates natural death
+Death_US_natural <- Death_US[Death_US$MannerOfDeath == 7, ]
+
+```
+
+## Select required variables
+
+```{r,warning=FALSE, message=FALSE}
+require(MASS)
+require(dplyr)
+natural_sub <- Death_US_natural %>% dplyr::select(Education2003Revision, Sex, Age, 
+                      InfantAgeRecode22, 
+                      PlaceOfDeathAndDecedentsStatus, MaritalStatus, InjuryAtWork,
+                      MannerOfDeath, 
+                      Autopsy, ActivityCode, PlaceOfInjury, Icd10Code,CauseRecode358,
+                      CauseRecode113, InfantCauseRecode130,CauseRecode39,
+                      NumberOfEntityAxisConditions,NumberOfRecordAxisConditions,Race)
+
+```
+
+## Converting Character variable into Integer variable
+```{r, warning=FALSE}
+natural_sub$Sex <- as.integer(as.factor(natural_sub$Sex)) 
+natural_sub$MaritalStatus <- as.integer(as.factor(natural_sub$MaritalStatus))
+natural_sub$InjuryAtWork <- as.integer(as.factor(natural_sub$InjuryAtWork))
+natural_sub$Autopsy <- gsub("n", "N", natural_sub$Autopsy)
+natural_sub$Autopsy <- as.integer(as.factor(natural_sub$Autopsy))  
+natural_sub$Icd10Code <- as.integer(as.factor(natural_sub$Icd10Code))  
+
+```
+
+As we analyzed the feature variables are "Age + InfantAgeRecode22 + 
+PlaceOfDeathAndDecedentsStatus + MaritalStatus + ActivityCode + PlaceOfInjury + 
+NumberOfRecordAxisConditions + NumberOfEntityAxisConditions"
+
+```{r,warning=FALSE}
+# Since the decision tree support till 32 levels removing 7 levels which has less entries
+table(factor(natural_sub$CauseRecode39))
+CauseExtraRemove <- natural_sub[, natural_sub$CauseRecode39 %in% c(2, 40, 41, 42, 38, 35, 1)]
+table(CauseExtraRemove)
+# remove the 7 factors levels from Death_US_natural dataset
+natural_sub <- natural_sub[!(CauseExtraRemove)]
+nrow(natural_sub)
+
+# model data
+modeldata <- natural_sub
+
+# We will do a random 70:30 split in our data set (70% will be for training models, 
+# 30% to evaluate them)
+set.seed(111)
+# randomly pick 70% of the number of observations 
+index <- sample.split(modeldata$CauseRecode39, SplitRatio = 0.7)
+# subset data to include only the elements in the index
+train <- subset(modeldata, index==T)
+nrow(train)
+# subset data to include all but the elements in the index
+test <- subset(modeldata, index==F)
+nrow(test)
+# take a copy of ICD10Code of test set and remove the variable from test set
+Cause39 <- test$CauseRecode39
+test$CauseRecode39 <- NULL
+```
+
+# Model 3:: Gradient Bootstrapping
+```{r}
+gbm2 <- gbm(as.factor(CauseRecode39) ~ Age + InfantAgeRecode22 + 
+                     PlaceOfDeathAndDecedentsStatus + MaritalStatus + ActivityCode + 
+                       PlaceOfInjury + NumberOfRecordAxisConditions +
+                     NumberOfEntityAxisConditions,
+                  data = train,
+            var.monotone=c(0,0,0,0,0,0,0,0),
+                  # +1: monotone increase,
+                  #  0: no monotone restrictions
+                  distribution="gaussian",     # bernoulli, adaboost, gaussian,
+                  # poisson, coxph, and quantile available
+                  n.trees=3000,                # number of trees
+                  shrinkage=0.005,             # shrinkage or learning rate,
+                  # 0.001 to 0.1 usually work
+                  interaction.depth=3,         # 1: additive model, 2: two-way interactions, etc.
+                  bag.fraction = 0.5,          # subsampling fraction, 0.5 is probably best
+                  n.minobsinnode = 10,         # minimum total weight needed in each node
+                  cv.folds = 5,                # do 5-fold cross-validation
+                  keep.data=TRUE,              # keep a copy of the dataset with the object
+                  verbose=T )
+
+# check performance using an out-of-bag estimator
+# OOB underestimates the optimal number of iterations
+best.iter <- gbm.perf(gbm2,method="OOB")
+print(best.iter)
+
+data.predict = predict(gbm2, n.trees = best.iter, newdata = test)
+# Confusion matrix
+conf_matrix <- table(data.predict, Cause39) 
+```
+
+**Accuracy of model and SSE**
+```{r}
+#Accuracy
+sum(diag(conf_matrix)) / nrow(test) 
+
+# SSE
+SSE = sum((Cause39 - data.predict)^2)
+print(SSE)
+```
+

@@ -1,0 +1,232 @@
+---
+title: "Random Forest Model"
+author: "Anushree Shivarudrappa"
+date: "June 27, 2016"
+output: pdf_document
+---
+
+# 1. Pre-Processing
+```{r, warning=FALSE, message=FALSE}
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(RColorBrewer)
+library(tidyr)
+library(caTools)
+library(rpart)
+library(rpart.plot)
+library(ROCR)
+library(randomForest)
+library(tree)
+library(caret)
+library(e1071)
+```
+
+# 2. Data Loading
+```{r, echo=FALSE}
+setwd("/Users/anushreeshivarudrappa/Desktop/Spring Board/SB Capstone DeathRecords DataSet")
+```
+```{r, message=FALSE, warning=FALSE,results='hide'}
+Death_US <- fread("DeathRecords.csv", header = T)
+
+```
+
+# 3. Selecting dataset for model
+
+```{r}
+#Create a new subgroup for "Age" variable
+Death_US$AgeGroup <- cut(Death_US$Age, c(0,19,25,39,60,110))
+levels(Death_US$AgeGroup) <- c("Teenager", "Young_Adult", "Adult", "Middle_Age",
+                               "Senior_Citizens")
+# separates natural death
+Death_US_natural <- Death_US[Death_US$MannerOfDeath == 7, ]
+
+```
+
+## Select required variables
+
+```{r}
+require(MASS)
+require(dplyr)
+natural_sub <- Death_US_natural %>% dplyr::select(Education2003Revision, Sex, Age, AgeGroup,
+                      InfantAgeRecode22, 
+                      PlaceOfDeathAndDecedentsStatus, MaritalStatus, InjuryAtWork,
+                      MannerOfDeath, 
+                      Autopsy, ActivityCode, PlaceOfInjury, Icd10Code,CauseRecode358,
+                      CauseRecode113, InfantCauseRecode130,CauseRecode39,
+                      NumberOfEntityAxisConditions,NumberOfRecordAxisConditions,Race)
+
+```
+
+## Converting Character variable into Integer variable
+```{r, warning=FALSE}
+natural_sub$Sex <- as.integer(as.factor(natural_sub$Sex)) 
+natural_sub$MaritalStatus <- as.integer(as.factor(natural_sub$MaritalStatus))
+natural_sub$InjuryAtWork <- as.integer(as.factor(natural_sub$InjuryAtWork))
+natural_sub$Autopsy <- gsub("n", "N", natural_sub$Autopsy)
+natural_sub$Autopsy <- as.integer(as.factor(natural_sub$Autopsy))  
+natural_sub$Icd10Code <- as.integer(as.factor(natural_sub$Icd10Code))  
+natural_sub$AgeGroup <- as.integer(as.factor(natural_sub$AgeGroup)) 
+
+
+# check for NA values if there remove it
+sapply(natural_sub, function(x) sum(is.na(x)))
+na_index <- natural_sub[, !is.na(natural_sub$AgeGroup)]
+natural_sub <- natural_sub[na_index]
+
+
+# Convert all the variable into factor except CauseRecode39 & Age
+natural_sub <- as.data.frame(natural_sub)
+CauseRecode39 <- natural_sub$CauseRecode39
+natural_sub$CauseRecode39 <- NULL
+Age <- natural_sub$Age
+natural_sub$Age <- NULL
+
+natural_sub[sapply(natural_sub, is.integer)] <- lapply(natural_sub[sapply(natural_sub, is.integer)], 
+                                       as.factor)
+natural_sub <- cbind(natural_sub,Age,CauseRecode39)
+
+```
+
+As we analyzed, the input model variables are " Age + InfantAgeRecode22 + 
+PlaceOfDeathAndDecedentsStatus + MaritalStatus + ActivityCode + PlaceOfInjury + 
+NumberOfRecordAxisConditions"
+
+```{r,warning=FALSE}
+# Lets divide the CauseRecode39 into 3 groups wrt count of entries in each levels
+table(factor(natural_sub$CauseRecode39))
+
+# model data with CauseRecode39 having entries less than 10000
+modeldata_less <- natural_sub$CauseRecode39 %in% 
+                                c(1,2,3,5,25,29,32,33,34,35,38,40,41,42)
+modeldata_less <- natural_sub[modeldata_less, ]
+
+# model data with CauseRecode39 having entries less than 100000 and more than 10000
+modeldata_mid <- natural_sub$CauseRecode39 %in% 
+                               c(6,7,9,10,11,12,13,14,16,17,20,23,26,27,30,31,36,39)
+modeldata_mid <- natural_sub[modeldata_mid, ]
+
+# model data with CauseRecode39 having entries more than 100000
+modeldata_more <- natural_sub$CauseRecode39 %in% c(8,15,21,22,24,28,37)
+modeldata_more <- natural_sub[modeldata_more, ]                               
+  
+```
+
+# Model for the data with CauseRecode39 having entries less than 10000
+```{r}
+# We will do a random 89:11 split in our data set (89% will be for training models, 
+# 11% to evaluate them)
+set.seed(111)
+# randomly pick 70% of the number of observations 
+index <- sample.split(modeldata_less$CauseRecode39, SplitRatio = 0.89)
+# subset data to include only the elements in the index
+train <- subset(modeldata_less, index==T)
+nrow(train)
+# subset data to include all but the elements in the index
+test <- subset(modeldata_less, index==F)
+nrow(test)
+# take a copy of ICD10Code of test set and remove the variable from test set
+Cause39 <- test$CauseRecode39
+test$CauseRecode39 <- NULL
+
+
+## Model
+model_forest <- randomForest(as.factor(CauseRecode39) ~  Age + InfantAgeRecode22 + 
+                     PlaceOfDeathAndDecedentsStatus + MaritalStatus + ActivityCode + 
+                       PlaceOfInjury + NumberOfEntityAxisConditions , 
+                     data = train,
+                     nodesize = 25, ntree = 1501)
+
+
+# Predict the test dataset using random forest model
+predict_forest <- predict(model_forest, newdata = test)
+# confusion matrix
+conf_matrix <- table(predict_forest, Cause39) 
+conf_matrix
+# accuracy
+sum(diag(conf_matrix)) / nrow(test) 
+```
+
+# Model for the data with CauseRecode39 having entries more than 10000 and less than 100000
+```{r}
+# We will do a random 89:11 split in our data set (89% will be for training models, 
+# 11% to evaluate them)
+set.seed(112)
+# randomly pick 70% of the number of observations 
+index <- sample.split(modeldata_mid$CauseRecode39, SplitRatio = 0.89)
+# subset data to include only the elements in the index
+train <- subset(modeldata_mid, index==T)
+nrow(train)
+# subset data to include all but the elements in the index
+test <- subset(modeldata_mid, index==F)
+nrow(test)
+# take a copy of ICD10Code of test set and remove the variable from test set
+Cause39 <- test$CauseRecode39
+test$CauseRecode39 <- NULL
+
+
+## Model
+model_forest <- randomForest(as.factor(CauseRecode39) ~  Age + InfantAgeRecode22 + 
+                     PlaceOfDeathAndDecedentsStatus + MaritalStatus + ActivityCode + 
+                       PlaceOfInjury + NumberOfEntityAxisConditions , 
+                     data = train,
+                     nodesize = 25, ntree = 1501, na.action = na.omit)
+
+# Predict the test dataset using random forest model
+predict_forest <- predict(model_forest, newdata = test)
+# confusion matrix
+conf_matrix <- table(predict_forest, Cause39) 
+conf_matrix
+# accuracy
+sum(diag(conf_matrix)) / nrow(test) 
+
+```
+
+```{r, echo=FALSE}
+rm(Death_US)
+rm(Death_US_natural)
+rm(natural_sub)
+rm(modeldata_less)
+rm(modeldata_less)
+rm(train)
+rm(test)
+rm(model_forest)
+rm(conf_matrix)
+
+```
+
+# Model for the data with CauseRecode39 having entries More than 100000
+```{r}
+# We will do a random 89:11 split in our data set (89% will be for training models, 
+# 11% to evaluate them)
+set.seed(113)
+# randomly pick 70% of the number of observations 
+index <- sample.split(modeldata_more$CauseRecode39, SplitRatio = 0.89)
+# subset data to include only the elements in the index
+train <- subset(modeldata_more, index==T)
+nrow(train)
+# subset data to include all but the elements in the index
+test <- subset(modeldata_more, index==F)
+nrow(test)
+# take a copy of ICD10Code of test set and remove the variable from test set
+Cause39 <- test$CauseRecode39
+test$CauseRecode39 <- NULL
+
+## Model
+model_forest <- randomForest(as.factor(CauseRecode39) ~  Age + InfantAgeRecode22 + 
+                     PlaceOfDeathAndDecedentsStatus + MaritalStatus + ActivityCode + 
+                       PlaceOfInjury + NumberOfEntityAxisConditions , 
+                     data = train,
+                     nodesize = 25, ntree = 1501, na.action = na.omit)
+
+# Predict the test dataset using random forest model
+predict_forest <- predict(model_forest, newdata = test)
+# confusion matrix
+conf_matrix <- table(predict_forest, Cause39) 
+conf_matrix
+# accuracy
+sum(diag(conf_matrix)) / nrow(test) 
+```
+
+ 
