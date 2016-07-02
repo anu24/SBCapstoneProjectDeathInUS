@@ -39,17 +39,14 @@ Death_US <- fread("DeathRecords.csv", header = T)
 Death_US$AgeGroup <- cut(Death_US$Age, c(0,19,25,39,60,110))
 levels(Death_US$AgeGroup) <- c("Teenager", "Young_Adult", "Adult", "Middle_Age",
                                "Senior_Citizens")
-# separates natural death
-Death_US_natural <- Death_US[Death_US$MannerOfDeath == 7, ]
-
 ```
 
 ## Select required variables
 
-```{r}
+```{r,warning=FALSE, message=FALSE}
 require(MASS)
 require(dplyr)
-natural_sub <- Death_US_natural %>% dplyr::select(Education2003Revision, Sex, Age, AgeGroup,
+natural_sub <- Death_US %>% dplyr::select(Education2003Revision, Sex, Age, AgeGroup,
                       InfantAgeRecode22, 
                       PlaceOfDeathAndDecedentsStatus, MaritalStatus, InjuryAtWork,
                       MannerOfDeath, 
@@ -214,11 +211,19 @@ Cause39 <- test$CauseRecode39
 test$CauseRecode39 <- NULL
 
 ## Model
-model_forest <- randomForest(as.factor(CauseRecode39) ~  Age + InfantAgeRecode22 + 
+model_forest1 <- randomForest(as.factor(CauseRecode39) ~  Age + InfantAgeRecode22 + 
                      PlaceOfDeathAndDecedentsStatus + MaritalStatus + ActivityCode + 
                        PlaceOfInjury + NumberOfEntityAxisConditions , 
-                     data = train,
+                     data = train[1:600000, ],
                      nodesize = 25, ntree = 1501, na.action = na.omit)
+
+model_forest2 <- randomForest(as.factor(CauseRecode39) ~  Age + InfantAgeRecode22 + 
+                     PlaceOfDeathAndDecedentsStatus + MaritalStatus + ActivityCode + 
+                       PlaceOfInjury + NumberOfEntityAxisConditions , 
+                     data = train[600001:1200000, ],
+                     nodesize = 25, ntree = 1501, na.action = na.omit)
+
+model_forest <- combine(model_forest1, model_forest2)
 
 # Predict the test dataset using random forest model
 predict_forest <- predict(model_forest, newdata = test)
